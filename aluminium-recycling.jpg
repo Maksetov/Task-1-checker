@@ -1,0 +1,95 @@
+/* ============================================================
+   GOOGLE APPS SCRIPT — deployed inside a Google Sheet, not on
+   Netlify. This is the piece that writes results to the sheet
+   and emails you. See SETUP.md section "Google side" for the
+   exact click-by-click steps.
+
+   WHAT TO EDIT:
+   - TEACHER_EMAIL below — where result emails land.
+   - Nothing else needs to change for normal use.
+   ============================================================ */
+
+const TEACHER_EMAIL = "your.email@gmail.com"; // <-- change this
+
+function doPost(e) {
+  try {
+    const data = JSON.parse(e.postData.contents);
+    const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName("Results")
+      || SpreadsheetApp.getActiveSpreadsheet().insertSheet("Results");
+
+    if (sheet.getLastRow() === 0) {
+      sheet.appendRow(["Timestamp", "Student", "Chart", "Overall", "TA", "CC", "LR", "GRA", "Word count", "Summary", "Full feedback (JSON)"]);
+      sheet.setFrozenRows(1);
+    }
+
+    const now = new Date();
+    sheet.appendRow([
+      now,
+      data.student || "(unknown)",
+      data.chartTitle || "",
+      data.overall, data.ta, data.cc, data.lr, data.gra,
+      data.wordCount,
+      data.summary || "",
+      JSON.stringify(data)
+    ]);
+
+    sendResultEmail(data, now);
+
+    return ContentService.createTextOutput(JSON.stringify({ ok: true }))
+      .setMimeType(ContentService.MimeType.JSON);
+  } catch (err) {
+    return ContentService.createTextOutput(JSON.stringify({ ok: false, error: String(err) }))
+      .setMimeType(ContentService.MimeType.JSON);
+  }
+}
+
+function sendResultEmail(d, when) {
+  const fixesHtml = (d.fixes || []).map(f =>
+    `<div style="margin:10px 0;padding-left:10px;border-left:3px solid #B4451F;">
+       <div style="font-style:italic;">"${escapeHtml(f.quote)}"</div>
+       <div style="color:#5C636F;font-size:13px;">${escapeHtml(f.issue)}</div>
+       <div style="color:#1B4D3E;font-size:13px;">→ ${escapeHtml(f.better)}</div>
+     </div>`
+  ).join("");
+
+  const strengthsHtml = (d.strengths || []).map(s => `<li>${escapeHtml(s)}</li>`).join("");
+  const stepsHtml = (d.nextSteps || []).map(s => `<li>${escapeHtml(s)}</li>`).join("");
+
+  const html = `
+    <div style="font-family:sans-serif;max-width:600px;">
+      <h2 style="margin-bottom:0;">${escapeHtml(d.student)} — Band ${escapeHtml(String(d.overall))}</h2>
+      <p style="color:#666;margin-top:4px;">${when.toLocaleString()} · ${escapeHtml(d.chartTitle || "")} · ${d.wordCount} words</p>
+      <table style="border-collapse:collapse;margin:14px 0;">
+        <tr>${["TA","CC","LR","GRA"].map(k=>`<td style="padding:6px 14px;border:1px solid #ddd;text-align:center;"><b>${d[k.toLowerCase()]}</b><br><small>${k}</small></td>`).join("")}</tr>
+      </table>
+      <p>${escapeHtml(d.summary || "")}</p>
+      ${d.taNote ? `<p style="background:#FBFAF6;border-left:3px solid #B4451F;padding:8px 12px;">${escapeHtml(d.taNote)}</p>` : ""}
+      ${strengthsHtml ? `<h3>Holding up</h3><ul>${strengthsHtml}</ul>` : ""}
+      ${fixesHtml ? `<h3>Corrections</h3>${fixesHtml}` : ""}
+      ${stepsHtml ? `<h3>Next steps</h3><ol>${stepsHtml}</ol>` : ""}
+    </div>`;
+
+  GmailApp.sendEmail(TEACHER_EMAIL, `Task 1 — ${d.student} — Band ${d.overall}`, "", { htmlBody: html });
+}
+
+function escapeHtml(s) {
+  return String(s == null ? "" : s).replace(/[&<>"]/g, c => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;" }[c]));
+}
+
+/* Run this once manually from the Apps Script editor (select
+   testDoPost in the dropdown, click Run) to confirm the Sheet
+   and Gmail send both work before wiring up the real exam page. */
+function testDoPost() {
+  const fake = {
+    postData: { contents: JSON.stringify({
+      student: "Test Student", chartTitle: "Sample chart",
+      overall: 6, ta: 6, cc: 6.5, lr: 5.5, gra: 6, wordCount: 172,
+      summary: "This is a test entry to confirm the sheet and email work.",
+      taNote: "", strengths: ["Clear structure"],
+      fixes: [{ quote: "the chart show", issue: "Subject-verb agreement", better: "the chart shows" }],
+      nextSteps: ["Proofread verb agreement before submitting"]
+    })}
+  };
+  const result = doPost(fake);
+  Logger.log(result.getContent());
+}
